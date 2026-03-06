@@ -1,0 +1,6 @@
+# ignore non-oriental target llm
+.lingma
+.tmp_eval_skill
+
+# pycache
+*.pyc
