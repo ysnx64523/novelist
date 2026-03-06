@@ -21,6 +21,7 @@ PROJECT_README = """# 项目说明
 建议每次开工前后执行：
 - 写前体检：`python scripts/narrative_engine.py doctor --project .`
 - 写前上下文：`python scripts/narrative_engine.py context --project . --chapter <章节号> --create-chapter`
+- 写前分镜：`python scripts/narrative_engine.py storyboard --project . --chapter <章节号> --target-chars 3500 --create-context`
 - 交付门禁：`python scripts/narrative_engine.py gate --project . --chapter <章节号>`
 """
 

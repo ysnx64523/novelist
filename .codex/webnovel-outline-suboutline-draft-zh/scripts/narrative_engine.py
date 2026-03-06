@@ -46,6 +46,12 @@ PLACEHOLDER_SNIPPETS = [
     "在此写正文",
 ]
 
+STORYBOARD_REQUIRED_HEADINGS = [
+    "## 场景清单",
+    "## 章节描写规约（硬约束）",
+]
+STORYBOARD_SCENE_HEADING_RE = re.compile(r"^###\s*场景\s*\d+", re.M)
+
 
 @dataclass
 class CheckResult:
@@ -81,6 +87,18 @@ def count_non_whitespace(text: str) -> int:
 
 def chapter_file(project_dir: Path, chapter: int) -> Path:
     return project_dir / "正文" / f"第{chapter:03d}章.md"
+
+
+def engine_dir(project_dir: Path) -> Path:
+    return project_dir / "正文" / ".engine"
+
+
+def context_file(project_dir: Path, chapter: int) -> Path:
+    return engine_dir(project_dir) / f"第{chapter:03d}章-上下文.md"
+
+
+def storyboard_file(project_dir: Path, chapter: int) -> Path:
+    return engine_dir(project_dir) / f"第{chapter:03d}章-分镜纲.md"
 
 
 def read_utf8(path: Path) -> str:
@@ -132,6 +150,40 @@ def infer_next_chapter(chapter_files: dict[int, Path]) -> int:
 
 def find_placeholders(text: str) -> list[str]:
     return [marker for marker in PLACEHOLDER_SNIPPETS if marker in text]
+
+
+def infer_scene_count(target_chars: int) -> int:
+    if target_chars <= 1500:
+        return 2
+    if target_chars <= 3000:
+        return 3
+    if target_chars <= 5000:
+        return 4
+    return 5
+
+
+def scene_weight_distribution(scene_count: int) -> list[int]:
+    if scene_count <= 2:
+        return [45, 55]
+    if scene_count == 3:
+        return [25, 45, 30]
+    if scene_count == 4:
+        return [20, 30, 30, 20]
+    return [18, 24, 24, 20, 14]
+
+
+def extract_style_constraints(style_card_text: str, max_items: int = 4) -> list[str]:
+    lines = [line.strip() for line in style_card_text.splitlines()]
+    candidates: list[str] = []
+    for line in lines:
+        if not line:
+            continue
+        if line.startswith(("- ", "* ")):
+            candidates.append(line[2:].strip())
+            continue
+        if re.match(r"^\d+\.\s+", line):
+            candidates.append(re.sub(r"^\d+\.\s+", "", line).strip())
+    return [item for item in candidates if item][:max_items]
 
 
 def workspace_checks(project_dir: Path) -> list[CheckResult]:
@@ -313,6 +365,134 @@ def build_context_markdown(project_dir: Path, chapter: int) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def build_storyboard_markdown(project_dir: Path, chapter: int, target_chars: int) -> str:
+    suboutline_path = project_dir / "02-子大纲.md"
+    style_card_path = project_dir / "风格参考" / "02-风格卡.md"
+    context_path = context_file(project_dir, chapter)
+
+    suboutline_text = read_utf8(suboutline_path) if suboutline_path.exists() else ""
+    sections = split_suboutline_sections(suboutline_text) if suboutline_text else {}
+    section_text = sections.get(chapter, "（未在 02-子大纲.md 中找到对应章节）")
+    context_text = read_utf8(context_path) if context_path.exists() else "（未生成上下文文件）"
+    style_card_text = read_utf8(style_card_path) if style_card_path.exists() else ""
+
+    scene_count = infer_scene_count(target_chars)
+    weights = scene_weight_distribution(scene_count)
+    style_constraints = extract_style_constraints(style_card_text)
+
+    lines: list[str] = []
+    lines.append(f"# 第{chapter:03d}章分镜纲")
+    lines.append("")
+    lines.append(f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"- 目标章节：第{chapter:03d}章")
+    lines.append(f"- 目标字数：约 {target_chars} 字")
+    lines.append(f"- 建议场景数：{scene_count}")
+    lines.append("")
+    lines.append("## 本章输入摘要")
+    lines.append("")
+    lines.append("### 子大纲摘录")
+    lines.append("")
+    lines.append(section_text)
+    lines.append("")
+    lines.append("### 上下文摘录（首段）")
+    lines.append("")
+    context_excerpt = context_text.strip().splitlines()
+    if context_excerpt:
+        lines.extend(context_excerpt[:16])
+    else:
+        lines.append("（无）")
+    lines.append("")
+    lines.append(f"## 场景清单（共{scene_count}场）")
+    lines.append("")
+    for idx in range(scene_count):
+        scene_index = idx + 1
+        ratio = weights[idx] if idx < len(weights) else 20
+        lines.append(f"### 场景{scene_index}（建议占比 {ratio}%）")
+        lines.append("- 场景目的：")
+        lines.append("- 时间/地点：")
+        lines.append("- 出场角色：")
+        lines.append("- 冲突/阻力：")
+        lines.append("- 场景动作链（按先后写动作，不写总结）：")
+        lines.append("- 感官锚点（视觉/听觉/触觉至少二选一）：")
+        lines.append("- 对话任务（每段对话必须推动关系或信息）：")
+        lines.append("- 信息投放（新增/确认/误导/保留）：")
+        lines.append("- 伏笔操作（埋设/回收，引用ID）：")
+        lines.append("- 结尾钩子（把角色推入下一场景）：")
+        lines.append("")
+    lines.append("## 章节描写规约（硬约束）")
+    lines.append("")
+    lines.append("- 前20%必须出现冲突、异常或代价信号，禁止日常流水开场。")
+    lines.append("- 每个场景至少落地1个可视动作与1个可感知异常，不得只讲结论。")
+    lines.append("- 对话字数占比建议 30%-45%，超出时必须删空话与复述。")
+    lines.append("- 心理描写必须绑定外部动作或环境触发，不得连续空想。")
+    lines.append("- 章末必须给出“不可回避的下一步行动”，而非抽象感想。")
+    if style_constraints:
+        lines.append("")
+        lines.append("### 风格卡约束（自动摘录）")
+        lines.append("")
+        for item in style_constraints:
+            lines.append(f"- {item}")
+    lines.append("")
+    lines.append("## 写后回写提醒")
+    lines.append("")
+    lines.append("- 写完正文后回写 `07-当前角色状态.md` 本章行动记录。")
+    lines.append("- 写完正文后回写 `05-长线伏笔.csv` 并刷新统计。")
+    lines.append(
+        f"- 运行 `python scripts/narrative_engine.py gate --project \"{project_dir}\" --chapter {chapter}`。"
+    )
+    lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def check_storyboard_quality(storyboard_text: str, min_scenes: int) -> list[CheckResult]:
+    checks: list[CheckResult] = []
+    missing_headings = [
+        heading for heading in STORYBOARD_REQUIRED_HEADINGS if heading not in storyboard_text
+    ]
+    if missing_headings:
+        checks.append(
+            CheckResult(
+                "分镜纲结构完整性",
+                "FAIL",
+                f"缺少区块：{', '.join(missing_headings)}",
+            )
+        )
+    else:
+        checks.append(CheckResult("分镜纲结构完整性", "PASS", "结构完整"))
+
+    scene_count = len(STORYBOARD_SCENE_HEADING_RE.findall(storyboard_text))
+    if scene_count < min_scenes:
+        checks.append(
+            CheckResult(
+                "分镜场景数",
+                "FAIL",
+                f"仅识别到 {scene_count} 个场景，低于门禁下限 {min_scenes}。",
+            )
+        )
+    else:
+        checks.append(CheckResult("分镜场景数", "PASS", f"已识别 {scene_count} 个场景"))
+
+    field_checks = {
+        "场景目的：": "场景目的字段",
+        "冲突/阻力：": "冲突字段",
+        "信息投放（新增/确认/误导/保留）：": "信息投放字段",
+        "结尾钩子（把角色推入下一场景）：": "结尾钩子字段",
+    }
+    for token, label in field_checks.items():
+        count = storyboard_text.count(token)
+        if count < scene_count:
+            checks.append(
+                CheckResult(
+                    f"分镜字段覆盖：{label}",
+                    "WARN",
+                    f"字段出现 {count} 次，少于场景数 {scene_count}。",
+                )
+            )
+        else:
+            checks.append(CheckResult(f"分镜字段覆盖：{label}", "PASS", "覆盖完整"))
+    return checks
+
+
 def results_summary(results: list[CheckResult]) -> tuple[int, int, int]:
     passed = sum(1 for item in results if item.status == "PASS")
     warned = sum(1 for item in results if item.status == "WARN")
@@ -399,16 +579,51 @@ def cmd_context(args: argparse.Namespace) -> int:
         chapter_path.write_text(read_utf8(template_path), encoding="utf-8", newline="\n")
         print(f"[PASS] 已创建章节文件：{chapter_path}")
 
-    output_path = (
-        Path(args.out).resolve()
-        if args.out
-        else project_dir / "正文" / ".engine" / f"第{chapter:03d}章-上下文.md"
-    )
+    output_path = Path(args.out).resolve() if args.out else context_file(project_dir, chapter)
     markdown = build_context_markdown(project_dir, chapter)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(markdown, encoding="utf-8", newline="\n")
 
     print(f"[PASS] 已生成上下文文件：{output_path}")
+    return 0
+
+
+def cmd_storyboard(args: argparse.Namespace) -> int:
+    project_dir = Path(args.project).resolve()
+    if not project_dir.exists():
+        print(f"[FAIL] 项目目录不存在：{project_dir}")
+        return 2
+
+    chapter_files, _ = collect_chapter_files(project_dir / "正文")
+    chapter = args.chapter if args.chapter is not None else infer_next_chapter(chapter_files)
+
+    if args.create_context and not context_file(project_dir, chapter).exists():
+        markdown = build_context_markdown(project_dir, chapter)
+        context_path = context_file(project_dir, chapter)
+        context_path.parent.mkdir(parents=True, exist_ok=True)
+        context_path.write_text(markdown, encoding="utf-8", newline="\n")
+        print(f"[PASS] 已补生成上下文文件：{context_path}")
+
+    chapter_path = chapter_file(project_dir, chapter)
+    if args.create_chapter and not chapter_path.exists():
+        skill_root = Path(__file__).resolve().parent.parent
+        template_path = skill_root / "references" / "draft-template.md"
+        if not template_path.exists():
+            print(f"[FAIL] 缺少模板文件：{template_path}")
+            return 2
+        chapter_path.parent.mkdir(parents=True, exist_ok=True)
+        chapter_path.write_text(read_utf8(template_path), encoding="utf-8", newline="\n")
+        print(f"[PASS] 已创建章节文件：{chapter_path}")
+
+    output_path = Path(args.out).resolve() if args.out else storyboard_file(project_dir, chapter)
+    if output_path.exists() and not args.force:
+        print(f"[FAIL] 分镜纲已存在，使用 --force 覆盖：{output_path}")
+        return 2
+
+    markdown = build_storyboard_markdown(project_dir, chapter, args.target_chars)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(markdown, encoding="utf-8", newline="\n")
+    print(f"[PASS] 已生成分镜纲文件：{output_path}")
     return 0
 
 
@@ -502,6 +717,20 @@ def cmd_gate(args: argparse.Namespace) -> int:
                     CheckResult("子大纲覆盖本章", "FAIL", "子大纲未找到该章节，请先补全。")
                 )
 
+        chapter_storyboard_path = storyboard_file(project_dir, chapter)
+        if not chapter_storyboard_path.exists():
+            results.append(
+                CheckResult(
+                    "分镜纲中间件",
+                    "FAIL",
+                    f"缺少分镜纲：{chapter_storyboard_path}（先运行 storyboard 命令）",
+                )
+            )
+        else:
+            results.append(CheckResult("分镜纲中间件", "PASS", str(chapter_storyboard_path)))
+            storyboard_text = read_utf8(chapter_storyboard_path)
+            results.extend(check_storyboard_quality(storyboard_text, args.min_scenes))
+
         csv_path = project_dir / "05-长线伏笔.csv"
         if csv_path.exists():
             rows = load_rows(csv_path)
@@ -576,7 +805,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="网文叙事引擎运行器：项目体检、上下文构建、章节门禁。"
+        description="网文叙事引擎运行器：项目体检、上下文构建、分镜中间件、章节门禁。"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -596,6 +825,35 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("--out", help="上下文输出文件路径。")
     context.set_defaults(func=cmd_context)
 
+    storyboard = subparsers.add_parser(
+        "storyboard", help="生成指定章节的分镜纲中间件。"
+    )
+    storyboard.add_argument("--project", default=".", help="项目目录路径。")
+    storyboard.add_argument(
+        "--chapter", type=int, help="目标章节号；默认自动推断下一章。"
+    )
+    storyboard.add_argument(
+        "--target-chars",
+        type=int,
+        default=3500,
+        help="目标章节字数，用于估算场景数量。默认 3500。",
+    )
+    storyboard.add_argument(
+        "--create-context",
+        action="store_true",
+        help="若本章上下文不存在，先自动生成上下文文件。",
+    )
+    storyboard.add_argument(
+        "--create-chapter",
+        action="store_true",
+        help="如果目标章节文件不存在，则用正文模板创建。",
+    )
+    storyboard.add_argument("--out", help="分镜纲输出文件路径。")
+    storyboard.add_argument(
+        "--force", action="store_true", help="覆盖已存在的分镜纲文件。"
+    )
+    storyboard.set_defaults(func=cmd_storyboard)
+
     gate = subparsers.add_parser("gate", help="对指定章节执行交付前门禁检查。")
     gate.add_argument("--project", default=".", help="项目目录路径。")
     gate.add_argument("--chapter", required=True, type=int, help="目标章节号。")
@@ -614,6 +872,12 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument(
         "--report",
         help="门禁报告输出路径，默认 <项目目录>/08-叙事引擎报告.md。",
+    )
+    gate.add_argument(
+        "--min-scenes",
+        type=int,
+        default=2,
+        help="分镜纲至少应包含的场景数，默认 2。",
     )
     gate.add_argument("--strict", action="store_true", help="将 WARN 视为非通过。")
     gate.set_defaults(func=cmd_gate)

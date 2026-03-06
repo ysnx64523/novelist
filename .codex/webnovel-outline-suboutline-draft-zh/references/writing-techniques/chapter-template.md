@@ -1,5 +1,7 @@
 # 第[X]章：[章节标题]
 
+> 写正文前先生成分镜纲中间件：`python scripts/narrative_engine.py storyboard --project <项目目录> --chapter <章节号> --target-chars 3500 --create-context`
+
 ## 本章概要
 - **核心事件**：[一句话概括本章发生的事]
 - **承接上章**：[回应上一章的悬念]
